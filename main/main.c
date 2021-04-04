@@ -1,27 +1,30 @@
-#include <stdio.h>
+// Hints: change File>Preferences>Keyboard shortcuts so ctrl-S saves all.
+//	Every new .c file has to be added manually to the list in CMakeLists.txt.
+//		This is solve path problems, sometimes.
 
+
+#include <stdio.h>
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "pinTasks.h"
 
-#define PIN GPIO_NUM_2
+// Set the level before .h file
+//#define LOG_LOCAL_LEVEL ESP_LOG_NONE
+//#define LOG_LOCAL_LEVEL ESP_LOG_VERBOSE
+#include "esp_log.h"
+#define TAG "inMain"
 
-// see https://www.learnesp32.com/3_blinkey for details
-void blinky(void *params)
-{
-	gpio_pad_select_gpio(PIN);
-	gpio_set_direction(PIN, GPIO_MODE_OUTPUT);
-	int isOn = 0;
-	while (true)
-	{
-		isOn = !isOn;
-		gpio_set_level(PIN, isOn);
-		vTaskDelay(1000 / portTICK_PERIOD_MS);
-	}
-}
+
+
 void app_main(void)
 {
-  printf("Hello world!\n");
-  
-  xTaskCreate(&blinky, "blink led", 2048, NULL, 2, NULL);
+    ESP_LOGI(TAG,"Starting...\n\n");
+	
+	LEDsetup();
+	LEDblink(3);
+
+    ESP_LOGI(TAG,"Goodbye world!\n");
+
+	vTaskDelay(portMAX_DELAY); //wait indefinitely
 }
