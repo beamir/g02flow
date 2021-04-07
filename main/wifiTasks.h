@@ -13,4 +13,7 @@ void wifiSetup(void);
 //gets quote of day
 void qodget(void);
 
+//sends a text
+void SMSsend(char *mobile);
+
 #endif

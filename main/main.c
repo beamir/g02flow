@@ -1,6 +1,8 @@
 // Hints: change File>Preferences>Keyboard shortcuts so ctrl-S saves all.
 //	Every new .c file has to be added manually to the list in CMakeLists.txt.
 //		This is solve path problems, sometimes.
+// <ctl><alt>downArrow makes extra cursors straight down, useful if changing similar
+//		lines. <esc> to exit.
 
 
 //#include <stdio.h>
@@ -26,11 +28,14 @@ void app_main(void)
 	LEDblink(3);
 
 	wifiSetup(); //this blocks until a connection is made
-	//vTaskDelay(10000 / portTICK_RATE_MS); //how do I know when ready?
 
-		qodget();
+	qodget(); //this blocks until complete
+
+	//sends the message currently in the rxBuf
+	SMSsend("+16199933344"); //this blocks until complete
 
     ESP_LOGI(TAG,"Goodbye world!\n");
 
+	//vTaskDelay(10000 / portTICK_RATE_MS); //how do I know when ready?
 	//vTaskDelay(portMAX_DELAY); //wait indefinitely
 }

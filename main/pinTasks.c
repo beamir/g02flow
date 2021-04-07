@@ -1,5 +1,11 @@
 //Small tasks involving GPIO
 // gac 4/3/21
+//Note the priority of app_main() is 1 (highest)
+//  Priority 2 = medium/periodic stuff
+//  Priority 3 = low / events
+//  Priority 4? = lowest / idle task, housekeeping
+//Note a "task" is void task1(void * params){ never return;}
+//  "params" are passed during xTaskCreate().
 
 //#include <stdio.h>
 #include "driver/gpio.h"
@@ -52,7 +58,7 @@ void LEDsetup(void){
     gpio_pad_select_gpio(LEDdebug);
 	gpio_set_direction(LEDdebug, GPIO_MODE_OUTPUT);
     blinkAmtQ = xQueueCreate(3, sizeof(int)); //max 3 integers in queue
-    xTaskCreatePinnedToCore(&LEDblinkTask, "blink LED", 1024, NULL, 2, NULL, 1);
+    xTaskCreatePinnedToCore(&LEDblinkTask, "blink LED", 1024, NULL, 3, NULL, 1);
 }
 
 //blink the debug LED "count" times. Do LEDsetup() first. Non-blocking, triggers task.

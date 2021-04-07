@@ -82,7 +82,8 @@ void cb_connection_ok(void *pvParameter){
 	esp_ip4addr_ntoa(&param->ip_info.ip, str_ip, IP4ADDR_STRLEN_MAX);
 
 	ESP_LOGI(TAG, "I have a connection and my IP is %s!", str_ip);
-    //got ip, clients can operate
+    //got ip, clients can operate. I can't unblock mutex because I am
+    // not the task that took the semaphore.
     ipAvailable = true;
     
     // TODO: this works but doesn't change name in router to BEAMIR212
@@ -216,17 +217,32 @@ void wifiSetup()
 #include "cJSON.h"
  
 //extra stuff a client needs
+typedef struct {
+    char *key;
+    char *val;
+} Header;
+
+typedef enum {
+    Get,
+    Post
+} HttpMethod;
+
 struct appFetchParams
 {
+    HttpMethod method;
+    int headerCount;
+    Header header[10];
+    char *body;
     void (*OnGotData)(char *incomingBuffer, struct appFetchParams *appParams); //function  urlData -> clientData
     char * rxBuf;   //the data the client wants
     int16_t rxLast; //index of last rxBuf element (size - 1)
     esp_err_t err;  //error code returned by esp client process (s/b ESP_OK)
-    int response;   // http response status code (to client request)
+    int status;   // http response status code (to client request)
 };
 
-//general purpose buffer for any use, any client
+//general purpose buffers for any use, any client
 char rxClientBuf[300];
+char txClientBuf[1024];
 
 // Started by clientFetch, we gather url data as it becomes available,
 //  then call user function to process. After user function, handler
@@ -235,15 +251,16 @@ char rxClientBuf[300];
 // Although the clientEventHandler() is generic, it can not be used
 //  by multiple clients simultaneously (unless it's reentrant?). Each
 //  client is responsible for insuring exclusive use.
-char *buffer = NULL;
-int indexBuffer = 0;
 esp_err_t clientEventHandler(esp_http_client_event_t *evt)
 {
+    static char *buffer = NULL;
+    static int indexBuffer = 0;
+
     switch (evt->event_id)
     {
     case HTTP_EVENT_ON_DATA:
         ESP_LOGI(TAG, "HTTP_EVENT_ON_DATA Len=%d", evt->data_len);
-printf("%.*s\n", evt->data_len, (char *)evt->data);
+    //printf("%.*s\n", evt->data_len, (char *)evt->data);
         if (buffer == NULL)
         {
             buffer = (char *)malloc(evt->data_len);
@@ -264,7 +281,10 @@ printf("%.*s\n", evt->data_len, (char *)evt->data);
     
         //get the handler for this particular data
         struct appFetchParams * appParams = (struct appFetchParams *)evt->user_data;
-        appParams->OnGotData(buffer, appParams);
+        if (appParams->OnGotData != NULL)
+        {
+            appParams->OnGotData(buffer, appParams);
+        }
 
         free(buffer);
         buffer = NULL;
@@ -309,12 +329,27 @@ printf("%.*s\n", evt->data_len, (char *)evt->data);
 //Kicks off fetching data, then leaves clientEventHandler() (typically) to do the work.
 void clientFetch(esp_http_client_config_t * pClientConfig)
 {
+    //dig out our extra user configuration parameters
+    struct appFetchParams * userParams = pClientConfig->user_data;
+
     esp_http_client_handle_t client = esp_http_client_init(pClientConfig);
+    if (userParams->method == Post)
+    {
+        esp_http_client_set_method(client, HTTP_METHOD_POST);
+    }
+    for (int i = 0; i < userParams->headerCount; i++)
+    {
+        esp_http_client_set_header(client, userParams->header[i].key, userParams->header[i].val);
+    }
+    if(userParams->body != NULL)
+    {
+        esp_http_client_set_post_field(client, userParams->body, strlen(userParams->body));
+    }
     esp_err_t err = esp_http_client_perform(client); //THIS BLOCKS UNTIL DONE!!!
-    ((struct appFetchParams *)(pClientConfig->user_data))->err = err; //save for user
+    userParams->err = err; //save for user
     if (err == ESP_OK)
     {
-        ((struct appFetchParams *)(pClientConfig->user_data))->response = esp_http_client_get_status_code(client);
+        userParams->status = esp_http_client_get_status_code(client);
         ESP_LOGI(TAG, "HTTP GET status = %d",
                  esp_http_client_get_status_code(client));
         //ESP_LOGI(TAG, "HTTP GET status = %d, content_length = %d",
@@ -354,9 +389,9 @@ void qodProcessURLdata(char *incomingBuffer, struct appFetchParams *appParams) {
         //ESP_LOGI(TAG,"%s",quote->valuestring);
         //Note only the "quote" quotesElement is saved. Note rxLast + 1 = rxBuf size.
         strncpy(appParams->rxBuf, quote->valuestring, appParams->rxLast);
-        printf("\nEssence =%s",quote->valuestring);
+        //printf("\nEssence =%s",quote->valuestring);
         (appParams->rxBuf)[appParams->rxLast] = 0; //in case quote longer than buf
-        printf("\nTakeaway=%s",appParams->rxBuf);
+        //printf("\nTakeaway=%s",appParams->rxBuf);
     }
     cJSON_Delete(payload);
 }
@@ -370,6 +405,9 @@ void qodget(void){
     xSemaphoreTake(connectionSemaphore, portMAX_DELAY); //wait indefinitely
 
     struct appFetchParams qodFetchParams = {
+        .method = Get,
+        .headerCount = 0,
+        .body = NULL,
         .OnGotData = qodProcessURLdata,
         .rxBuf = rxClientBuf,
         .rxLast = sizeof(rxClientBuf) - 1 //last element set to NULL for safety.
@@ -393,14 +431,130 @@ void qodget(void){
     if (xSemaphoreGive(connectionSemaphore) == pdFALSE ) {
         ESP_LOGE(TAG,"Unimaginable");
     }
-    ESP_LOGI(TAG, "qodget finished with err=%d, ret=[%d],/r--%s--", qodFetchParams.err, qodFetchParams.response, qodFetchParams.rxBuf);
+    ESP_LOGI(TAG, "qodget finished with err=%d, ret=[%d],\r\n--%s--", qodFetchParams.err, qodFetchParams.status, qodFetchParams.rxBuf);
 
-    //Analyze results. One failure can be:
+    //Analyze results. Status = 200 is good. One failure can be:
     // {
     //     "error": {
     //         "code": 429,
     //         "message": "Too Many Requests: Rate limit of 10 requests per hour exceeded. Please wait for 18 minutes and 27 seconds."
     //     }
     // }
-    if (qodFetchParams.response == 429) strcpy(qodFetchParams.rxBuf,"qod Requests exceeded per hour.");
+    if (qodFetchParams.status == 429) strcpy(qodFetchParams.rxBuf,"qod Requests exceeded per hour.");
+}
+
+void SMSsend(char *mobile) {
+    /* Our provider is messagemedia.com
+    1: goto API and get an API key and API secret
+    2: goto (developer tools) authentication and get Example request with Basic Authentication
+
+POST /v1/messages HTTP/1.1
+Host: api.messagemedia.com
+Accept: application/json
+Content-Type: application/json
+Authorization: Basic dGhpc2lzYWtleTp0aGlzaXNhc2VjcmV0Zm9ybW1iYXNpY2F1dGhyZXN0YXBp
+{
+  "messages": [
+    {
+      "content": "Hello World",
+      "destination_number": "+61491570156",
+      "format": "SMS"
+    }
+  ]
+} 
+
+    Note: Host=url, POST=follows url (url/v1/messages), Accept/Content/Auth=headers
+    Note: long Auth string is encoded block described previously:
+
+Authorization: Basic Base64(api_key:api_secret)
+
+    3: goto Postman and start a new request using information from the Example.
+        select POST
+        https://apimessagemedia.com/v1/messages
+        >Headers
+            Accepts        application/json
+            Content-Type   application/json
+            (Can't seem to get rid of auto-generated headers but ok)
+        >Auth
+            Type is Basic Auth
+            Username is api key (step 1)
+            Password is api secret (step 1)
+            NOW THE AUTHENTICATION HEADER IS FILLED IN
+        >Body
+            Select "raw"
+            Paste in the body from example (step 2)
+            Change content message and phone number
+        Click Send
+        Returns (hopefully) 202 accepted with a body of stuff
+        But 202 doesn't mean your text number was correct!!!
+
+
+        */
+
+    ESP_LOGI(TAG, "SMS awaiting turn...");
+    //if (xSemaphoreTake(connectionSemaphore, 10000 / portTICK_RATE_MS))
+    xSemaphoreTake(connectionSemaphore, portMAX_DELAY); //wait indefinitely
+
+    struct appFetchParams SMSFetchParams = {
+        .method = Post,
+        .headerCount = 3,
+        .body = txClientBuf,
+        .OnGotData = NULL,
+        .rxBuf = rxClientBuf,
+        .rxLast = sizeof(rxClientBuf) - 1 //last element set to NULL for safety.
+    };
+    //Don't do this inside initializer or compiler complains you didn't do them all.
+    SMSFetchParams.header[0].key = "Content-Type",
+    SMSFetchParams.header[0].val = "application/json",
+    SMSFetchParams.header[1].key = "Accept",
+    SMSFetchParams.header[1].val = "application/json",
+    SMSFetchParams.header[2].key = "Authorization",
+    SMSFetchParams.header[2].val = "Basic c09keU5SOU5aVlhtbHVQb3czQ3E6T1c0bVlnaWgzQ0ZSelRlQXg4NTNZa21xejZId0tI",
+
+    //Create JSON body with message and phone number.
+    sprintf(SMSFetchParams.body,
+          "{"
+            "\"messages\": ["
+              "{"
+                "\"content\": \"%s\","
+                "\"destination_number\": \"%s\","
+                "\"format\": \"SMS\""
+              "}"
+            "]"
+          "}",
+          rxClientBuf, mobile);
+    
+    // If you want to use JSON to create the body, see: \esp-idf\components\json\cJSON>readme
+    //      or https://github.com/espressif/esp-idf/blob/master/components/json/README
+    // cJSON *root,*mess;
+    // root = cJSON_CreateObject();
+    // cJSON_AddItemToObject(root, "messages", mess=cJSON_CreateObject());
+    // cJSON_AddArrayToObject(mess, );
+
+    //ESP_LOGI(TAG,"To messagemedia: %s",SMSFetchParams.body);
+
+    // one of these for every webpage you want
+    esp_http_client_config_t clientConfig = {
+        .url = "https://api.messagemedia.com/v1/messages",
+        .event_handler = clientEventHandler,
+        //.username = "user",
+        //.password = "secret",
+        //.port = 80,
+        //.timeout_ms = 2000,
+        //.buffer_size = 300,
+        //.buffer_size_tx = 300,
+        .user_data = (void *)&SMSFetchParams
+    };
+
+
+//clientFetch(&clientConfig); //blocks until complete, result in rxBuf
+
+
+    if (xSemaphoreGive(connectionSemaphore) == pdFALSE ) {
+        ESP_LOGE(TAG,"Unimaginable");
+    }
+    ESP_LOGI(TAG, "SMS finished with err=%d, ret=[%d], tried=%s", SMSFetchParams.err, SMSFetchParams.status, SMSFetchParams.rxBuf);
+    // [202]
+    //Analyze results. Status in 200's usually good. One failure can be:
+ 
 }
