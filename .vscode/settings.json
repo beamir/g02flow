@@ -9,6 +9,12 @@
     "*.md": "markdown",
     "*.mdx": "tdx",
     "stdio.h": "c",
-    "freertos.h": "c"
-  }
+    "freertos.h": "c",
+    "*.inc": "cpp",
+    "exception": "cpp",
+    "wifi_manager.h": "c",
+    "esp_system.h": "c",
+    "system_error": "c"
+  },
+  "C_Cpp.errorSquiggles": "Enabled"
 }
