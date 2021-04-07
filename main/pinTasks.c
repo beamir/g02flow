@@ -52,7 +52,7 @@ void LEDsetup(void){
     gpio_pad_select_gpio(LEDdebug);
 	gpio_set_direction(LEDdebug, GPIO_MODE_OUTPUT);
     blinkAmtQ = xQueueCreate(3, sizeof(int)); //max 3 integers in queue
-    xTaskCreate(&LEDblinkTask, "blink LED", 1024, NULL, 2, NULL);
+    xTaskCreatePinnedToCore(&LEDblinkTask, "blink LED", 1024, NULL, 2, NULL, 1);
 }
 
 //blink the debug LED "count" times. Do LEDsetup() first. Non-blocking, triggers task.
