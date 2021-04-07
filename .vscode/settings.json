@@ -14,7 +14,8 @@
     "exception": "cpp",
     "wifi_manager.h": "c",
     "esp_system.h": "c",
-    "system_error": "c"
+    "system_error": "c",
+    "wifitasks.h": "c"
   },
   "C_Cpp.errorSquiggles": "Enabled"
 }
